@@ -174,6 +174,51 @@ def test_prepare_reinserts_active_request_archived_by_snip_compact(
     assert request in rendered
 
 
+def test_prepare_is_idempotent_when_still_over_message_limit(
+        tmp_path, monkeypatch):
+    """agent_loop calls prepare() every iteration; the reinsertion must not
+    stack up duplicate request messages or re-archive on every pass."""
+    lesson = load_lesson(monkeypatch, tmp_path)
+    request = "compare s08 and s09 context handling"
+    messages = [
+        {"role": "user", "content": "earlier question one"},
+        {"role": "assistant", "content": [{"type": "text", "text": "answer one"}]},
+        {"role": "user", "content": "earlier question two"},
+        {"role": "assistant", "content": [{"type": "text", "text": "answer two"}]},
+        {"role": "user", "content": request},
+        {"role": "assistant", "content": [{"type": "text", "text": "starting"}]},
+    ]
+    for index in range(26):
+        tool_id = f"tool-{index}"
+        messages.extend([
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": tool_id, "name": "bash", "input": {}}
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": tool_id, "content": f"out-{index}"}
+            ]},
+        ])
+
+    compactor = lesson["COMPACTOR"]
+    prepared = compactor.prepare(list(messages), request)
+    assert len(prepared) <= 50  # prepare() leaves the list within the snip limit
+    assert prepared[0]["content"] == f"Current user request:\n{request}"
+    transcripts_before = list(
+        (tmp_path / ".transcripts").glob("transcript_*.jsonl"))
+
+    prepared_again = compactor.prepare(list(prepared), request)
+
+    assert prepared_again == prepared
+    request_messages = [
+        message for message in prepared_again
+        if isinstance(message.get("content"), str)
+        and message["content"].startswith("Current user request:")
+    ]
+    assert len(request_messages) == 1
+    assert len(list((tmp_path / ".transcripts").glob("transcript_*.jsonl"))) \
+        == len(transcripts_before)
+
+
 def test_prepare_does_not_duplicate_active_request_visible_in_tail(
         tmp_path, monkeypatch):
     lesson = load_lesson(monkeypatch, tmp_path)

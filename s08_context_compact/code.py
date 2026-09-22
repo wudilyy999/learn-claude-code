@@ -513,7 +513,8 @@ class ContextCompactor:
             self.is_archive_marker(message) for message in messages
         ) and not any(
             isinstance(message.get("content"), str)
-            and message["content"] == active_request
+            and (message["content"] == active_request
+                 or message["content"].startswith("Current user request:"))
             for message in messages
             if message.get("role") == "user"
         ):
@@ -523,6 +524,10 @@ class ContextCompactor:
             # reactive_compact so the model never loses the active task.
             messages.insert(0, {"role": "user", "content":
                                 f"Current user request:\n{active_request}"})
+            # The extra message can push the list back over the snip limit;
+            # archive again now so the next prepare() call in the agent loop
+            # stays stable instead of re-archiving on every iteration.
+            messages = self.snip_compact(messages)
         if self.estimate_chars(messages) > self.CONTEXT_CHAR_LIMIT:
             target = int(self.CONTEXT_CHAR_LIMIT * 0.8)
             messages = self.micro_compact(messages, target)
